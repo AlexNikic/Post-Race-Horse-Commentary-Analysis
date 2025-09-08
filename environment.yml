@@ -1,0 +1,31 @@
+name: myenv
+channels:
+  - pypdfium2-team
+  - bblanchon
+  - conda-forge
+  - https://repo.anaconda.com/pkgs/main
+  - https://repo.anaconda.com/pkgs/r
+  - https://repo.anaconda.com/pkgs/msys2
+dependencies:
+  - python=3.12
+  - pip
+  - numpy
+  - pandas
+  - scipy
+  - matplotlib
+  - scikit-learn
+  - nltk
+  - gensim
+  - statsmodels
+  - tqdm
+  - jupyterlab
+  - pip:
+      - bertopic==0.17.3
+      - hdbscan==0.8.40
+      - umap-learn==0.5.9.post2
+      - sentence-transformers==5.0.0
+      - transformers==4.53.3
+      - torch==2.7.1
+      - plotly==6.2.0
+      - xgboost==3.0.2
+prefix: C:\Users\alexn\miniconda3\envs\myenv

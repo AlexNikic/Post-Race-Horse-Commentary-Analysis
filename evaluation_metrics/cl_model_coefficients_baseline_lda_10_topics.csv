@@ -1,0 +1,2 @@
+model,beta_hat,beta_z_stat,beta_se,beta_ci_lower,beta_ci_upper,beta_p_val,gamma_hat,gamma_z_stat,gamma_se,gamma_ci_lower,gamma_ci_upper,gamma_p_val
+baseline,0.9506445419097467,199.75611757376558,0.004759025923492402,0.9413170224982091,0.9599720613212842,0.0,,,,,,
