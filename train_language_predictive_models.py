@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 from sklearn import svm
 from xgboost import XGBClassifier
-from sklearn.naive_bayes import GaussianNB
+from sklearn.naive_bayes import GaussianNB, BernoulliNB
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.model_selection import GridSearchCV, PredefinedSplit
 from scipy.stats import ttest_rel
@@ -41,15 +41,6 @@ def calibrate_model(model, X_val, y_val):
 # ------------------ Evaluation functions ------------------
 
 def t_test_vs_uniform(model, X_val, y_val):
-    """
-    Performs a paired one-sided t-test comparing per-sample Brier score
-    of a model against uniform random predictions.
-    
-    Returns:
-    - t_statistic
-    - one-sided p-value
-    - mean Brier score improvement (uniform - model)
-    """
     y_pred = model.predict_proba(X_val)   # shape (n_samples, n_classes)
     n_samples, n_classes = y_pred.shape
 
@@ -127,7 +118,7 @@ if __name__ == "__main__":
         xgb_param_grid = {
             'n_estimators': [50, 100, 200],
             'max_depth': [3, 5, 7],
-            'learning_rate': [0.01, 0.1, 0.2]
+            'learning_rate': [0.01, 0.1]
         }
         xgboost_model, xgb_best_params = tune_model(
             XGBClassifier(use_label_encoder=False, eval_metric='logloss'),
@@ -137,11 +128,11 @@ if __name__ == "__main__":
 
         # Naive Bayes
         print(f"Tuning Naive Bayes for {model_type} with {num_topics} topics...")
-        nb_param_grid = {'var_smoothing': [1e-9, 1e-8, 1e-7, 1e-6]}
         naive_bayes_model, nb_best_params = tune_model(
-            GaussianNB(), nb_param_grid, X_train, y_train, X_val, y_val
+            BernoulliNB(), {}, X_train, y_train, X_val, y_val
         )
         print("Best Naive Bayes params:", nb_best_params)
+
 
         # ------------------ Calibrate models ------------------
         calibrated_xgboost = calibrate_model(xgboost_model, X_val, y_val)
@@ -163,7 +154,7 @@ if __name__ == "__main__":
                 "t_statistic": t_stat,
                 "p_value": p_value,
                 "p_value_bonferroni": p_value_bonf,
-                "mean_logloss_improvement": mean_diff
+                "mean_brier_diff": mean_diff
             })
 
             print(f"{name}: t-statistic = {t_stat:.4f}, original p-value = {p_value:.4f}, "
@@ -171,7 +162,7 @@ if __name__ == "__main__":
 
         # Save t-test results
         t_test_results_df = pd.DataFrame(t_test_results)
-        t_test_results_df.to_csv(f"evaluation_metrics/t_test_vs_uniform_bonferroni_{model_type}_{num_topics}.csv", index=False)
+        t_test_results_df.to_csv(f"evaluation_metrics/t_test_vs_uniform_{model_type}_{num_topics}.csv", index=False)
         print(f"T-test results with Bonferroni correction saved for {model_type} with {num_topics} topics.")
 
         # Save models
@@ -222,7 +213,7 @@ if __name__ == "__main__":
     xgb_param_grid = {
         'n_estimators': [50, 100, 200],
         'max_depth': [3, 5, 7],
-        'learning_rate': [0.01, 0.1, 0.2]
+        'learning_rate': [0.01, 0.1]
     }
     xgboost_model, xgb_best_params = tune_model(
         XGBClassifier(use_label_encoder=False, eval_metric='logloss'),
@@ -232,10 +223,13 @@ if __name__ == "__main__":
 
     # Naive Bayes
     print(f"Tuning Naive Bayes for {model_type}...")
-    nb_param_grid = {'var_smoothing': [1e-9, 1e-8, 1e-7, 1e-6]}
+    # Naive Bayes
+    print(f"Tuning Naive Bayes for {model_type} with {num_topics} topics...")
     naive_bayes_model, nb_best_params = tune_model(
-        GaussianNB(), nb_param_grid, X_train, y_train, X_val, y_val
+        GaussianNB(), {}, X_train, y_train, X_val, y_val
     )
+    print("Best Naive Bayes params:", nb_best_params)
+
     print("Best Naive Bayes params:", nb_best_params)
 
     # ------------------ Calibrate models ------------------
@@ -251,14 +245,14 @@ if __name__ == "__main__":
                         ("Naive Bayes", naive_bayes_model),
                         ("Calibrated Naive Bayes", calibrated_naive_bayes)]:
         t_stat, p_value, mean_diff = t_test_vs_uniform(model, X_val, y_val)
-        p_value_bonf = min(p_value * n_tests, 1.0)  # Bonferroni correction # TODO: remove bonferroni correctioin
+        p_value_bonf = min(p_value * n_tests, 1.0)  # Bonferroni correction
 
         t_test_results.append({
             "model": name,
             "t_statistic": t_stat,
             "p_value": p_value,
             "p_value_bonferroni": p_value_bonf,
-            "mean_logloss_improvement": mean_diff
+            "mean_brier_diff": mean_diff
         })
 
         print(f"{name}: t-statistic = {t_stat:.4f}, original p-value = {p_value:.4f}, "
@@ -266,7 +260,7 @@ if __name__ == "__main__":
 
     # Save t-test results
     t_test_results_df = pd.DataFrame(t_test_results)
-    t_test_results_df.to_csv(f"evaluation_metrics/t_test_vs_uniform_bonferroni_{model_type}.csv", index=False)
+    t_test_results_df.to_csv(f"evaluation_metrics/t_test_vs_uniform_{model_type}.csv", index=False)
     print(f"T-test results with Bonferroni correction saved for {model_type}.")
 
     # Save models

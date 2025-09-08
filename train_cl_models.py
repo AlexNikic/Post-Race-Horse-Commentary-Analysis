@@ -5,8 +5,12 @@ from joblib import load
 from scipy.stats import ttest_rel
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+import os
 
 # NOTE: In an ideal world, I would like to be able to save the CL models, but statsmodels does not support this yet.
+
+def kelly_fraction(p, d):
+    return max((d * p - 1) / (d - 1), 0)
 
 def add_prob_and_logit(col_prefix, model):
     ds[f"{col_prefix}_win_prob"] = model.predict_proba(ds[feature_cols])[:, 1]
@@ -28,12 +32,14 @@ def predict_conditional_logit(result, ds, feature_cols):
     
     return probs
 
-def plot_strategy(strategy, ds, path):
+def plot_strategy(strategy, ds, graph_path, eval_path):
     # Ensure dataset is in chronological order
     ds = ds.sort_values(by=['date', 'race_id']).reset_index(drop=True)
     ds["date"] = pd.to_datetime(ds["date"])
 
     fig, ax = plt.subplots()
+
+    stats_list = []
 
     for strat in strategy:
         model_name = strat["model"]
@@ -50,6 +56,17 @@ def plot_strategy(strategy, ds, path):
 
         ds[f"cum_pnl_{model_name}"] = ds[f"pnl_{model_name}"].cumsum()
 
+        # betting stats
+        pnl = ds[f"pnl_{model_name}"].sum()
+        sum_wagers = wagers.sum()
+        roi = pnl / sum_wagers if sum_wagers != 0 else 0
+        stats_list.append({
+            "model": model_name,
+            "pnl": pnl,
+            "num_bets": (wagers > 0).sum(),
+            "roi": roi
+        })
+
         ax.plot(ds["date"], ds[f"cum_pnl_{model_name}"], label=model_name, linestyle='-')
 
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
@@ -62,10 +79,15 @@ def plot_strategy(strategy, ds, path):
     plt.grid(True)
     plt.tight_layout()
     plt.legend()
-    plt.savefig(path) 
+    plt.savefig(graph_path)
+
+    stats_df = pd.DataFrame(stats_list)
+    stats_df.to_csv(eval_path, index=False)
 
 if __name__ == "__main__":
-    for model_type in ["embeddings"]: #["lda", "embeddings"]:
+    os.makedirs("betting_graphs", exist_ok=True)
+
+    for model_type in ["lda", "embeddings"]:
         number_of_topics = [10, 20, 30, 40, 50] if model_type == "lda" else [128]
         for num_topics in number_of_topics:
             print(f"Processing {num_topics} topics...")
@@ -135,7 +157,7 @@ if __name__ == "__main__":
                 calibrated_xgb_model = load(f"language_predictive_models/calibrated_xgboost_{model_type}.joblib")
 
             print("Predicting with language models...")
-            logscore_df = pd.DataFrame(columns=["model", "t_stat", "se", "ci_lower", "ci_upper", "p_val_one_sided", "mean_log_score_diff"])
+            brier_df = pd.DataFrame(columns=["model", "t_stat", "se", "ci_lower", "ci_upper", "p_val_one_sided", "mean_brier_diff"])
             for model_name, model in [("nb", nb_model), ("calibrated_nb", calibrated_nb_model),
                                         ("xgb", xgb_model), ("calibrated_xgb", calibrated_xgb_model)]:
                 
@@ -195,7 +217,7 @@ if __name__ == "__main__":
                 ci_upper = mean_diff + 1.96 * se
 
                 # Append to dataframe
-                logscore_df = pd.concat([logscore_df, pd.DataFrame({
+                brier_df = pd.concat([brier_df, pd.DataFrame({
                     "model": [model_name],
                     "t_stat": [t_stat],
                     "se": [se],
@@ -207,21 +229,65 @@ if __name__ == "__main__":
 
 
                 # betting strategy (on test set)
-                # for each race, we bet £1 on the horse with the highest predicted win probability if EV > bet_threshold
-                bet_threshold = 0.2  # minimum expected value to place a bet
+                # for each race, we bet a kelly fraction of £1 on the horse with the highest predicted win probability if EV > bet_threshold
+                bet_threshold = 0.15  # minimum expected value to place a bet
+                
+                # Random Guessing
+                ds["prob_winner"] = ds.groupby("race_id")["race_id"].transform(lambda x: 1/ len(x))
+                ds["expected_value"] = ds["prob_winner"] * (ds["sp"] - 1) - (1 - ds["prob_winner"])
+                ds["kelly_fraction"] = ds.apply(lambda row: kelly_fraction(row["prob_winner"], row["sp"]), axis=1)
+                random_horses = ds.groupby("race_id").sample(1, random_state=42).index
+                ds["bet_flag"] = 0
+                ds.loc[random_horses, "bet_flag"] = 1
+                ds["bet"] = ((ds["bet_flag"]) & (ds["expected_value"] > bet_threshold)).astype(int) * ds["kelly_fraction"]
+                strategy = [{"model": "Random Guessing", "wagers": ds.loc[test_mask, "bet"]}]
+
+                # Language Model Only
+                ds["prob_winner"] = ds[f"{model_name}_win_prob"]
+                ds["expected_value"] = ds["prob_winner"] * (ds["sp"] - 1) - (1 - ds["prob_winner"])
+                ds["kelly_fraction"] = ds.apply(lambda row: kelly_fraction(row["prob_winner"], row["sp"]), axis=1)
+                max_probs = ds.groupby("race_id")["prob_winner"].transform("max")
+                idx = ds.groupby("race_id")["prob_winner"].idxmax()
+                ds["bet"] = 0.0
+                ds.loc[idx, "bet"] = (
+                    (ds.loc[idx, "expected_value"] > bet_threshold).astype(int) * ds.loc[idx, "kelly_fraction"]
+                )
+                strategy.append({"model": "Language Model", "wagers": ds.loc[test_mask, "bet"]})
+
+                print(f"Plotting lang strategy for {model_name} with {num_topics} topics...")
+                plot_strategy(strategy, ds.loc[test_mask].copy(), 
+                              graph_path=f"betting_graphs/lang_strategy_pnl_{model_type}_{model_name}_{num_topics}_topics.png",
+                              eval_path=f"evaluation_metrics/lang_strategy_pnl_{model_type}_{model_name}_{num_topics}_topics.csv")
+                
+                # Market Odds
                 ds["prob_winner"] = baseline_model_y_pred
                 ds["expected_value"] = ds["prob_winner"] * (ds["sp"] - 1) - (1 - ds["prob_winner"])
+                ds["kelly_fraction"] = ds.apply(lambda row: kelly_fraction(row["prob_winner"], row["sp"]), axis=1)
                 max_probs = ds.groupby("race_id")["prob_winner"].transform("max")
-                ds["bet"] = ((ds["prob_winner"] == max_probs) & (ds["expected_value"] > bet_threshold)).astype(int)
-                strategy = [{"model": f"baseline", "wagers": ds.loc[test_mask, "bet"]}]
+                idx = ds.groupby("race_id")["prob_winner"].idxmax()
+                ds["bet"] = 0.0
+                ds.loc[idx, "bet"] = (
+                    (ds.loc[idx, "expected_value"] > bet_threshold).astype(int) * ds.loc[idx, "kelly_fraction"]
+                )
+                strategy = [{"model": "Market Odds", "wagers": ds.loc[test_mask, "bet"]}]
+
+                # Full Model
                 ds["prob_winner"] = new_model_y_pred
                 ds["expected_value"] = ds["prob_winner"] * (ds["sp"] - 1) - (1 - ds["prob_winner"])
+                ds["kelly_fraction"] = ds.apply(lambda row: kelly_fraction(row["prob_winner"], row["sp"]), axis=1)
                 max_probs = ds.groupby("race_id")["prob_winner"].transform("max")
-                ds["bet"] = ((ds["prob_winner"] == max_probs) & (ds["expected_value"] > bet_threshold)).astype(int)
-                strategy.append({"model": f"{model_name}", "wagers": ds.loc[test_mask, "bet"]})
-                print(f"Plotting strategy for {model_name} with {num_topics} topics...")
-                plot_strategy(strategy, ds.loc[test_mask].copy(), path=f"evaluation_metrics/cl_model_strategy_pnl_{model_type}_{model_name}_{num_topics}_topics.png")
+                idx = ds.groupby("race_id")["prob_winner"].idxmax()
+                ds["bet"] = 0.0
+                ds.loc[idx, "bet"] = (
+                    (ds.loc[idx, "expected_value"] > bet_threshold).astype(int) * ds.loc[idx, "kelly_fraction"]
+                )
+                strategy.append({"model": "Full Model", "wagers": ds.loc[test_mask, "bet"]})
+
+                print(f"Plotting ensemble strategy for {model_name} with {num_topics} topics...")
+                plot_strategy(strategy, ds.loc[test_mask].copy(),
+                               graph_path=f"betting_graphs/cl_model_strategy_pnl_{model_type}_{model_name}_{num_topics}_topics.png",
+                               eval_path=f"evaluation_metrics/cl_model_strategy_pnl_{model_type}_{model_name}_{num_topics}_topics.csv")
 
 
-            logscore_df.to_csv(f"evaluation_metrics/cl_model_logscore_t_tests_{model_type}_{num_topics}_topics.csv", index=False)
+            brier_df.to_csv(f"evaluation_metrics/cl_model_brier_t_tests_{model_type}_{num_topics}_topics.csv", index=False)
             coefs_df.to_csv(f"evaluation_metrics/cl_model_coefficients_{model_type}_{num_topics}_topics.csv", index=False)

@@ -45,9 +45,6 @@ def apply_bigrams_clausewise(tokenized_docs_clauses, bigram_phraser, separator_t
     return processed_docs
 
 
-# TODO: plot the posterior distributions of the topics to find the most sensible way to generate the topics
-# thresholding or top K
-
 # Function to train LDA model
 def train_lda_model(num_topics, corpus, dictionary, model_path):
     print(f"{datetime.now()} ---Training LDA Model with {num_topics} topics on {model_path}---")

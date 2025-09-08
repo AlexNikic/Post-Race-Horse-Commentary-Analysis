@@ -16,8 +16,6 @@ def perform_chisq_and_correlation(model_type, num_topics):
         row = {"topic": f"topic_{i}"}
         for lag in [0, 1]:
             feature_col = f"topic_{i}" if lag == 0 else f"topic_{i}_lag_1"
-            pval_col_name = f"pval_lag{lag}_train"
-            corr_col_name = f"corr_lag{lag}_train"
 
             # Chi-squared test
             contingency_table = pd.crosstab(ds.loc[mask, feature_col], ds.loc[mask, "is_winner"])
@@ -28,14 +26,15 @@ def perform_chisq_and_correlation(model_type, num_topics):
             else:
                 corrected_p = np.nan
             
-            row[pval_col_name] = round(corrected_p, 4)
+            row[f"pval_lag{lag}_train"] = p
+            row[f"pval_lag{lag}_train_corrected"] = corrected_p
 
             # Pearson Correlation
             try:
                 corr, _ = pearsonr(ds.loc[mask, feature_col], ds.loc[mask, "is_winner"])
             except Exception:
                 corr = np.nan
-            row[corr_col_name] = round(corr, 4) if pd.notnull(corr) else np.nan
+            row[f"corr_lag{lag}_train"] = round(corr, 4) if pd.notnull(corr) else np.nan
         
         results.append(row)
 
